@@ -160,3 +160,23 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Ignore AWS credentials and config files
+.aws/
+
+# Ignore environment variable files
+.env
+
+# Ignore virtual environment directories
+venv/
+env/
+
+# Ignore compiled files
+__pycache__/
+*.pyc
+
+# Ignore deployment packages
+*.zip
+
+# Ignore logs
+*.log
