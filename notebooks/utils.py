@@ -5,6 +5,8 @@ import numpy as np
 from datetime import datetime
 from nba_api.stats.endpoints import leaguegamefinder, boxscoretraditionalv2
 from nba_api.stats.static import teams, players
+import psycopg2
+import os
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -275,6 +277,32 @@ def process_players(players_df):
     except Exception as e:
         logger.error(f'Error in process_players: {str(e)}')
         raise e
+
+
+        
+        
+        
+        
+
+# Database Functions
+# ==================        
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv('DB_HOST'),
+            port=os.getenv('DB_PORT'),
+            database=os.getenv('DB_NAME'),
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD')
+        )
+        return conn
+    except Exception as e:
+        logger.error(f"Database connection failed: {str(e)}")
+        raise e
+
+def read_sql_file(file_path):
+    with open(file_path, 'r') as file:
+        return file.read()
 
 def store_teams_in_rds(teams_df):
     """
