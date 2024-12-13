@@ -6,6 +6,7 @@ from datetime import datetime
 from nba_api.stats.endpoints import leaguegamefinder, boxscoretraditionalv2
 from nba_api.stats.static import teams, players
 import psycopg2
+from psycopg2 import extras
 import os
 
 # Configure logging
@@ -149,8 +150,27 @@ def process_boxscores(boxscores_df):
         else:
             logger.warning("No 'min' column in boxscores. Setting 'min' to null.")
             clean_boxscores_df['min'] = pd.NA
+            
+        # Convert Int64 columns to Python ints or None
+        for col in cols_to_convert_to_int64:
+            if col in clean_boxscores_df.columns:
+                clean_boxscores_df[col] = clean_boxscores_df[col].apply(lambda x: int(x) if pd.notnull(x) else None)
 
+        # Convert 'min' to float or None
+        if 'min' in clean_boxscores_df.columns:
+            clean_boxscores_df['min'] = clean_boxscores_df['min'].apply(lambda x: float(x) if pd.notnull(x) else None)
+
+        for col in ['team_id', 'player_id']:
+            if col in clean_boxscores_df.columns and str(clean_boxscores_df[col].dtype) == 'Int64':
+                clean_boxscores_df[col] = clean_boxscores_df[col].apply(lambda x: int(x) if pd.notnull(x) else None)
+                
+        # Rename columns
+        clean_boxscores_df.rename(columns={
+            'to': 'turnovers'
+        }, inplace=True)
+            
         return clean_boxscores_df
+    
     except Exception as e:
         logger.error(f'Error in process_boxscores: {str(e)}')
         raise e
@@ -306,18 +326,387 @@ def read_sql_file(file_path):
 
 def store_teams_in_rds(teams_df):
     """
-    Placeholder function to store teams into RDS.
-    Implement connection and insertion logic here.
+    Upsert teams data into the 'teams' table in RDS.
+    
+    teams_df columns:
+    - team_id (int64)
+    - team_name (object)
+    - nickname (object)
+    - team_abbreviation (object)
+    - city (object)
+    - state (object)
+    - year_founded (int64)
+    
+    Paramters:
+        - teams_df (pd.DataFrame): A Pandas dataframe containing processed data from the NBA API.
+        
+    Returns:
+        - None
     """
-    logger.info(f"Storing {len(teams_df)} teams to RDS...")
-    # TODO: Implement DB insertion logic
-    pass
+    if teams_df.empty:
+        logger.info("No team data to store.")
+        return
+    
+    insert_query = """
+        INSERT INTO teams (team_id, team_name, nickname, team_abbreviation, city, state, year_founded)
+        VALUES %s
+        ON CONFLICT (team_id)
+        DO UPDATE SET
+          team_name = EXCLUDED.team_name,
+          nickname = EXCLUDED.nickname,
+          team_abbreviation = EXCLUDED.team_abbreviation,
+          city = EXCLUDED.city,
+          state = EXCLUDED.state,
+          year_founded = EXCLUDED.year_founded;
+    """
+
+    records = []
+    for row in teams_df.itertuples(index=False):
+        record = (
+            row.team_id,
+            row.team_name,
+            row.nickname,
+            row.team_abbreviation,
+            row.city,
+            row.state,
+            row.year_founded
+        )
+        records.append(record)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        extras.execute_values(cursor, insert_query, records, page_size=100)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Upserted {len(records)} teams into RDS successfully.")
+    
+    except Exception as e:
+        logger.error(f"Failed to store teams in RDS: {str(e)}")
+        raise e
 
 def store_players_in_rds(players_df):
     """
-    Placeholder function to store players into RDS.
-    Implement connection and insertion logic here.
+    Upsert players data into the 'players' table in RDS.
+    
+    players_df columns:
+    - player_id (int64)
+    - player_name (object)
+    - first_name (object)
+    - last_name (object)
+    
+    Parameters:
+        - players_df (pd.DataFrame): A Pandas dataframe containing processed player data from the NBA API.
+        
+    Returns:
+        - None
     """
-    logger.info(f"Storing {len(players_df)} players to RDS...")
-    # TODO: Implement DB insertion logic
-    pass
+    if players_df.empty:
+        logger.info("No player data to store.")
+        return
+    
+    insert_query = """
+        INSERT INTO players (player_id, player_name, first_name, last_name)
+        VALUES %s
+        ON CONFLICT (player_id)
+        DO UPDATE SET
+          player_name = EXCLUDED.player_name,
+          first_name = EXCLUDED.first_name,
+          last_name = EXCLUDED.last_name;
+    """
+
+    records = []
+    for row in players_df.itertuples(index=False):
+        record = (
+            row.player_id,
+            row.player_name,
+            getattr(row, 'first_name', None),
+            getattr(row, 'last_name', None)
+        )
+        records.append(record)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        extras.execute_values(cursor, insert_query, records, page_size=100)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Upserted {len(records)} players into RDS successfully.")
+        
+    except Exception as e:
+        logger.error(f"Failed to store players in RDS: {str(e)}")
+        raise e
+        
+def store_games_in_rds(game_logs_df):
+    """
+    Upsert game logs data into the 'game_logs' table in RDS.
+    
+    game_logs_df columns:
+    - game_id (object)
+    - team_id (int64)
+    - season_id (int64)
+    - game_date (datetime64[ns])
+    - matchup (object)
+    - wl (object)
+    - min (int64)
+    - pts (int64)
+    - fgm (int64)
+    - fga (int64)
+    - fg3m (int64)
+    - fg3a (int64)
+    - ftm (int64)
+    - fta (int64)
+    - oreb (int64)
+    - dreb (int64)
+    - reb (int64)
+    - ast (int64)
+    - stl (int64)
+    - blk (int64)
+    - tov (int64)
+    - pf (int64)
+    - plus_minus (float64)
+    
+    Primary Key: (game_id, team_id)
+    
+    Parameters:
+        - game_logs_df (pd.DataFrame): A Pandas dataframe containing processed 
+          game log data from the NBA API.
+          
+    Returns:
+        - None
+    """
+
+    if game_logs_df.empty:
+        logger.info("No game log data to store.")
+        return
+
+    columns = [
+        'game_id',
+        'team_id',
+        'season_id',
+        'game_date',
+        'matchup',
+        'wl',
+        'min',
+        'pts',
+        'fgm',
+        'fga',
+        'fg3m',
+        'fg3a',
+        'ftm',
+        'fta',
+        'oreb',
+        'dreb',
+        'reb',
+        'ast',
+        'stl',
+        'blk',
+        'tov',
+        'pf',
+        'plus_minus'
+    ]
+
+    # Construct the insert query with ON CONFLICT
+    insert_query = f"""
+        INSERT INTO game_logs ({", ".join(columns)})
+        VALUES %s
+        ON CONFLICT (game_id, team_id)
+        DO UPDATE SET
+          season_id = EXCLUDED.season_id,
+          game_date = EXCLUDED.game_date,
+          matchup = EXCLUDED.matchup,
+          wl = EXCLUDED.wl,
+          min = EXCLUDED.min,
+          pts = EXCLUDED.pts,
+          fgm = EXCLUDED.fgm,
+          fga = EXCLUDED.fga,
+          fg3m = EXCLUDED.fg3m,
+          fg3a = EXCLUDED.fg3a,
+          ftm = EXCLUDED.ftm,
+          fta = EXCLUDED.fta,
+          oreb = EXCLUDED.oreb,
+          dreb = EXCLUDED.dreb,
+          reb = EXCLUDED.reb,
+          ast = EXCLUDED.ast,
+          stl = EXCLUDED.stl,
+          blk = EXCLUDED.blk,
+          tov = EXCLUDED.tov,
+          pf = EXCLUDED.pf,
+          plus_minus = EXCLUDED.plus_minus;
+    """
+
+    # Convert DataFrame rows to tuples for execute_values
+    records = []
+    for row in game_logs_df.itertuples(index=False):
+        record = (
+            getattr(row, 'game_id'),
+            getattr(row, 'team_id'),
+            getattr(row, 'season_id'),
+            getattr(row, 'game_date').to_pydatetime() if hasattr(getattr(row, 'game_date'), 'to_pydatetime') else getattr(row, 'game_date'),
+            getattr(row, 'matchup'),
+            getattr(row, 'wl'),
+            getattr(row, 'min'),
+            getattr(row, 'pts'),
+            getattr(row, 'fgm'),
+            getattr(row, 'fga'),
+            getattr(row, 'fg3m'),
+            getattr(row, 'fg3a'),
+            getattr(row, 'ftm'),
+            getattr(row, 'fta'),
+            getattr(row, 'oreb'),
+            getattr(row, 'dreb'),
+            getattr(row, 'reb'),
+            getattr(row, 'ast'),
+            getattr(row, 'stl'),
+            getattr(row, 'blk'),
+            getattr(row, 'tov'),
+            getattr(row, 'pf'),
+            float(getattr(row, 'plus_minus')) if pd.notnull(getattr(row, 'plus_minus')) else None
+        )
+        records.append(record)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        extras.execute_values(cursor, insert_query, records, page_size=100)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Upserted {len(records)} game log records into RDS successfully.")
+        
+    except Exception as e:
+        logger.error(f"Failed to store game logs in RDS: {str(e)}")
+        raise e
+        
+def store_boxscores_in_rds(boxscores_df):
+    """
+    Upsert boxscore data into the 'boxscores' table in RDS.
+
+    Columns in boxscores_df:
+    - game_id (object/string)
+    - team_id (int64)
+    - player_id (int64)
+    - start_position (object)
+    - comment (object)
+    - min (float64)
+    - fgm, fga, fg3m, fg3a, ftm, fta, oreb, dreb, reb, ast, stl, blk, turnovers, pf, pts, plus_minus (Int64)
+
+    Primary Key: (game_id, player_id)
+    
+    Parameters:
+        - boxscores_df (pd.DataFrame): A Pandas dataframe containing process box score data.
+        
+    Returns:
+        - None
+    """
+
+    if boxscores_df.empty:
+        logger.info("No boxscore data to store.")
+        return
+
+    columns = [
+        'game_id',
+        'team_id',
+        'player_id',
+        'start_position',
+        'comment',
+        'min',
+        'fgm',
+        'fga',
+        'fg3m',
+        'fg3a',
+        'ftm',
+        'fta',
+        'oreb',
+        'dreb',
+        'reb',
+        'ast',
+        'stl',
+        'blk',
+        'turnovers',
+        'pf',
+        'pts',
+        'plus_minus'
+    ]
+
+    insert_query = f"""
+        INSERT INTO boxscores ({", ".join(columns)})
+        VALUES %s
+        ON CONFLICT (game_id, player_id)
+        DO UPDATE SET
+          team_id = EXCLUDED.team_id,
+          start_position = EXCLUDED.start_position,
+          comment = EXCLUDED.comment,
+          min = EXCLUDED.min,
+          fgm = EXCLUDED.fgm,
+          fga = EXCLUDED.fga,
+          fg3m = EXCLUDED.fg3m,
+          fg3a = EXCLUDED.fg3a,
+          ftm = EXCLUDED.ftm,
+          fta = EXCLUDED.fta,
+          oreb = EXCLUDED.oreb,
+          dreb = EXCLUDED.dreb,
+          reb = EXCLUDED.reb,
+          ast = EXCLUDED.ast,
+          stl = EXCLUDED.stl,
+          blk = EXCLUDED.blk,
+          turnovers = EXCLUDED.turnovers,
+          pf = EXCLUDED.pf,
+          pts = EXCLUDED.pts,
+          plus_minus = EXCLUDED.plus_minus;
+    """
+
+    records = []
+    for row in boxscores_df.itertuples(index=False):
+        # Helper function to convert possibly pd.NA or np.int64 to Python int or None
+        def safe_int(x):
+            if pd.isnull(x):
+                return None
+            # Convert numpy.int64 to int
+            return int(x) if isinstance(x, (np.integer, np.int64)) else x
+
+        def safe_float(x):
+            if pd.isnull(x):
+                return None
+            # Convert if needed
+            return float(x)
+
+        record = (
+            getattr(row, 'game_id'),
+            safe_int(getattr(row, 'team_id')),
+            safe_int(getattr(row, 'player_id')),
+            getattr(row, 'start_position', None),
+            getattr(row, 'comment', None),
+            safe_float(getattr(row, 'min')),  # min is float
+            safe_int(getattr(row, 'fgm', None)),
+            safe_int(getattr(row, 'fga', None)),
+            safe_int(getattr(row, 'fg3m', None)),
+            safe_int(getattr(row, 'fg3a', None)),
+            safe_int(getattr(row, 'ftm', None)),
+            safe_int(getattr(row, 'fta', None)),
+            safe_int(getattr(row, 'oreb', None)),
+            safe_int(getattr(row, 'dreb', None)),
+            safe_int(getattr(row, 'reb', None)),
+            safe_int(getattr(row, 'ast', None)),
+            safe_int(getattr(row, 'stl', None)),
+            safe_int(getattr(row, 'blk', None)),
+            safe_int(getattr(row, 'turnovers', None)),
+            safe_int(getattr(row, 'pf', None)),
+            safe_int(getattr(row, 'pts', None)),
+            safe_int(getattr(row, 'plus_minus', None))
+        )
+        records.append(record)
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        extras.execute_values(cursor, insert_query, records, page_size=100)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        logger.info(f"Upserted {len(records)} boxscore records into RDS successfully.")
+    except Exception as e:
+        logger.error(f"Failed to store boxscores in RDS: {str(e)}")
+        raise e
