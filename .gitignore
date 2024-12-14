@@ -180,3 +180,17 @@ __pycache__/
 
 # Ignore logs
 *.log
+
+# Ignore Office documents
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+
+# Ignore CSV files
+*.csv
+
+# Ignore Power BI files
+*.pbix
