@@ -53,6 +53,7 @@ def get_game_logs(start_date_str, end_date_str, max_retries=3, initial_wait=2):
                 time.sleep(wait_time)
             else:
                 # All attempts have failed
+                record_game_log_failure(start_date_str, end_date_str, 3, str(e))
                 raise RuntimeError(f"Failed to fetch game logs after {max_retries} attempts.")
 
 def process_game_logs(df):
@@ -108,6 +109,7 @@ def get_boxscores(game_id, max_retries=3, initial_wait=2):
                 logger.info(f"Retrying get_boxscores in {wait_time} seconds...")
                 time.sleep(wait_time)
             else:
+                record_boxscore_failure(game_id, 3, str(e))
                 logger.error(f"Failed to fetch box scores for game_id {game_id} after {max_retries} attempts.")
                 return pd.DataFrame()
 
@@ -709,4 +711,73 @@ def store_boxscores_in_rds(boxscores_df):
         logger.info(f"Upserted {len(records)} boxscore records into RDS successfully.")
     except Exception as e:
         logger.error(f"Failed to store boxscores in RDS: {str(e)}")
+        raise e
+        
+def record_game_log_failure(start_date_str, end_date_str, attempt_count, error_message):
+    """
+    Stores failures while fetching game logs in the game_log_failures table in RDS.
+    
+    Parameters:
+        - start_date_str (str): A string representing the start date for the game logs. ('%m/%d/%Y')
+        - end_date_str (str): A string representing the end date for the game logs. ('%m/%d/%Y')
+        - attempt_count (int): The number of unsuccessful attepmts to retrieve the game logs.
+        - error_message (str): A string containing the exception thrown while fetching game logs.
+        
+    Returns:
+        - None
+    """
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        insert_query = """
+            INSERT INTO game_log_failures (start_date_str, end_date_str, attempt_count, error_message, created_at)
+            VALUES (%s, %s, %s, %s, NOW())
+            ON CONFLICT (start_date_str, end_date_str)
+            DO UPDATE SET
+              attempt_count = game_log_failures.attempt_count + EXCLUDED.attempt_count,
+              error_message = EXCLUDED.error_message,
+              created_at = NOW();
+        """
+        cursor.execute(insert_query, (start_date_str, end_date_str, attempt_count, error_message))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    
+    except Exception as e:
+        logger.error(f'Error in record_game_log_failure: {str(e)}')
+        raise e
+        
+def record_boxscore_failure(game_id, attempt_count, error_message):
+    """
+    Stores failures while fethcning box scores in the boxscore_failure table in RDS.
+    
+    Paramters:
+        - game_id (str): Unique identifier for the game_id for the failed boxscore.
+        - attempt_count (int): The number of unsuccessful attepmts to retrieve the box scores.
+        - error_message (str): A string containing the exception thrown while fetching box scores.
+        
+    Returns:
+        - None
+    """
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        insert_query = """
+            INSERT INTO boxscore_failures (game_id, attempt_count, error_message, created_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (game_id)
+            DO UPDATE SET
+              attempt_count = boxscore_failures.attempt_count + EXCLUDED.attempt_count,
+              error_message = EXCLUDED.error_message,
+              created_at = NOW();
+        """
+        cursor.execute(insert_query, (game_id, attempt_count, error_message))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    
+    except Exception as e:
+        logger.error(f'Error in record_boxscore_failure: {str(e)}')
         raise e
